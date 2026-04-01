@@ -3,7 +3,7 @@ dockerfilePath = "Dockerfile"
 
 [deploy]
 startCommand = "python src/main.py"
-healthcheckPath = "/summary"
+healthcheckPath = "/api/summary"
 healthcheckTimeout = 60
 restartPolicyType = "always"
 
