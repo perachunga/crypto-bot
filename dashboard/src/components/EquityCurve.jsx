@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import {
-  AreaChart, Area, XAxis, YAxis, CartesianGrid,
-  Tooltip, ResponsiveContainer, ReferenceLine, defs, linearGradient, stop
+  ComposedChart, Area, Line, XAxis, YAxis, CartesianGrid,
+  Tooltip, ResponsiveContainer, ReferenceLine, Legend
 } from 'recharts'
 import { T, pnlColor } from '../theme.js'
 import { API_BASE } from '../config.js'
@@ -10,37 +10,23 @@ const COLORS   = [T.orange, T.green, T.blue, T.yellow, '#cc44ff', '#ff44aa']
 const INITIAL  = 10000
 const MAX_PTS  = 200
 
-// Gradiente dinámico: verde si equity ≥ inicial, rojo si no
-function GradientDefs({ id, color }) {
-  return (
-    <defs>
-      <linearGradient id={id} x1="0" y1="0" x2="0" y2="1">
-        <stop offset="5%"  stopColor={color} stopOpacity={0.25} />
-        <stop offset="95%" stopColor={color} stopOpacity={0.02} />
-      </linearGradient>
-    </defs>
-  )
-}
-
 function CustomTooltip({ active, payload, label }) {
   if (!active || !payload?.length) return null
   return (
     <div style={{
       background: '#000', border: `1px solid ${T.border2}`,
-      padding: '8px 12px', fontSize: '11px', fontFamily: T.font,
-      minWidth: '160px',
+      padding: '8px 12px', fontSize: '11px', fontFamily: T.font, minWidth: '170px',
     }}>
-      <p style={{ color: T.gray, marginBottom: '6px', fontSize: '10px', letterSpacing: '1px' }}>{label}</p>
+      <p style={{ color: T.gray, marginBottom: '5px', fontSize: '9px', letterSpacing: '1px' }}>{label}</p>
       {payload.map((p, i) => {
-        const pnl   = p.value - INITIAL
-        const color = pnlColor(pnl)
+        const pnl = p.value
+        const col = pnlColor(pnl)
         return (
-          <div key={i} style={{ marginBottom: '3px' }}>
-            <span style={{ color: T.gray, fontSize: '9px', letterSpacing: '1px' }}>{p.name}</span>
-            <div style={{ display: 'flex', justifyContent: 'space-between', gap: '16px' }}>
-              <span style={{ color: p.color }}>${Number(p.value).toFixed(2)}</span>
-              <span style={{ color }}>{pnl >= 0 ? '+' : ''}${pnl.toFixed(2)}</span>
-            </div>
+          <div key={i} style={{ display: 'flex', justifyContent: 'space-between', gap: '12px', marginBottom: '2px' }}>
+            <span style={{ color: p.color, fontSize: '9px', letterSpacing: '1px' }}>{p.name}</span>
+            <span style={{ color: col, fontWeight: '700' }}>
+              {pnl >= 0 ? '+' : ''}${pnl.toFixed(2)}
+            </span>
           </div>
         )
       })}
@@ -48,52 +34,46 @@ function CustomTooltip({ active, payload, label }) {
   )
 }
 
-// Botón de selección de estrategia
-function StratBtn({ label, active, onClick }) {
+function StratBtn({ label, color, active, onClick, pnl }) {
+  const col = pnl != null ? pnlColor(pnl) : T.gray
   return (
     <button onClick={onClick} style={{
-      padding: '1px 7px', fontSize: '9px', fontFamily: T.font, letterSpacing: '1px',
-      background: active ? '#000' : 'transparent',
-      color:      active ? T.orange : '#000',
-      border:     active ? `1px solid ${T.orange}` : '1px solid transparent',
+      padding: '2px 8px', fontSize: '9px', fontFamily: T.font, letterSpacing: '1px',
+      background:   active ? '#111' : 'transparent',
+      color:        active ? (color || T.orange) : T.gray,
+      border:       active ? `1px solid ${color || T.orange}` : `1px solid ${T.border2}`,
       cursor: 'pointer', fontWeight: '700',
-    }}>{label}</button>
+      display: 'flex', alignItems: 'center', gap: '5px',
+    }}>
+      {label}
+      {pnl != null && (
+        <span style={{ color: col, fontSize: '8px' }}>
+          {pnl >= 0 ? '+' : ''}${Math.abs(pnl).toFixed(0)}
+        </span>
+      )}
+    </button>
   )
 }
 
 export default function EquityCurve({ refreshKey, wsMessage }) {
-  const [data,       setData]       = useState([])
+  const [rawData,    setRawData]    = useState({})   // { strategy: [{ time, equity }] }
   const [strategies, setStrategies] = useState([])
   const [selected,   setSelected]   = useState('ALL')
-  // chartMap: { strategyName: [{ time, value }, ...] }
-  const [chartMap,   setChartMap]   = useState(() => {
-    try { return JSON.parse(localStorage.getItem('equity_chart') || '{}') } catch { return {} }
-  })
 
-  // Persistir chartMap en localStorage
-  useEffect(() => {
-    localStorage.setItem('equity_chart', JSON.stringify(chartMap))
-  }, [chartMap])
-
-  // Cargar equity histórico desde API
   const loadEquity = useCallback(() => {
     fetch(`${API_BASE}/api/equity`)
       .then(r => r.json())
       .then(rows => {
-        const strats = new Set()
         const byStrat = {}
+        const strats  = new Set()
         rows.forEach(r => {
           strats.add(r.strategy_name)
           if (!byStrat[r.strategy_name]) byStrat[r.strategy_name] = []
           const ts = r.timestamp?.slice(11, 16) || ''
-          byStrat[r.strategy_name].push({ time: ts, value: r.equity })
+          byStrat[r.strategy_name].push({ time: ts, equity: r.equity })
         })
         setStrategies([...strats])
-        setChartMap(prev => {
-          const next = { ...prev }
-          Object.entries(byStrat).forEach(([s, pts]) => { next[s] = pts.slice(-MAX_PTS) })
-          return next
-        })
+        setRawData(byStrat)
       })
       .catch(() => {})
   }, [])
@@ -106,55 +86,38 @@ export default function EquityCurve({ refreshKey, wsMessage }) {
     const { strategy_name, equity } = wsMessage.data || {}
     if (!strategy_name || equity == null) return
     const ts = new Date().toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit' })
-    setChartMap(prev => {
-      const pts = [...(prev[strategy_name] || []), { time: ts, value: equity }].slice(-MAX_PTS)
+    setRawData(prev => {
+      const pts = [...(prev[strategy_name] || []), { time: ts, equity }].slice(-MAX_PTS)
       return { ...prev, [strategy_name]: pts }
     })
     setStrategies(prev => prev.includes(strategy_name) ? prev : [...prev, strategy_name])
   }, [wsMessage])
 
-  // Construir datos del gráfico según selección
-  const visibleStrats = selected === 'ALL' ? strategies : [selected]
+  // PnL de cada estrategia (último valor - INITIAL)
+  const stratPnl = (s) => {
+    const pts = rawData[s]
+    if (!pts?.length) return null
+    return pts[pts.length - 1].equity - INITIAL
+  }
 
-  // Para "ALL": merge todos los puntos en una timeline común
+  // Construir datos del gráfico: eje X = tiempo, cada columna = PnL de una estrategia
   const chartData = (() => {
-    if (selected !== 'ALL' && chartMap[selected]) {
-      return chartMap[selected].map(p => ({ time: p.time, [selected]: p.value }))
-    }
-    // Merge por tiempo
-    const merged = {}
-    visibleStrats.forEach(s => {
-      ;(chartMap[s] || []).forEach(p => {
+    const visibles = selected === 'ALL' ? strategies : [selected]
+    const merged   = {}
+    visibles.forEach(s => {
+      ;(rawData[s] || []).forEach(p => {
         if (!merged[p.time]) merged[p.time] = { time: p.time }
-        merged[p.time][s] = p.value
+        merged[p.time][s] = +(p.equity - INITIAL).toFixed(2)
       })
     })
     return Object.values(merged).slice(-MAX_PTS)
   })()
 
-  // Color dinámico para cada estrategia (verde/rojo/naranja según último valor)
-  const stratColor = (strat, idx) => {
-    const pts = chartMap[strat]
-    if (!pts?.length) return COLORS[idx % COLORS.length]
-    const last = pts[pts.length - 1].value
-    if (last > INITIAL * 1.001) return T.green
-    if (last < INITIAL * 0.999) return T.red
-    return COLORS[idx % COLORS.length]
-  }
+  const visibles = selected === 'ALL' ? strategies : [selected]
+  const isEmpty  = chartData.length === 0
 
-  // Stats rápidas del selected
-  const statsFor = (strat) => {
-    const pts = chartMap[strat]
-    if (!pts?.length) return null
-    const last = pts[pts.length - 1].value
-    const pnl  = last - INITIAL
-    const pct  = (pnl / INITIAL * 100)
-    const peak = Math.max(...pts.map(p => p.value))
-    const dd   = peak > 0 ? ((peak - last) / peak * 100) : 0
-    return { last, pnl, pct, dd }
-  }
-
-  const isEmpty = chartData.length === 0
+  // Stats globales en modo ALL
+  const totalPnl = strategies.reduce((acc, s) => acc + (stratPnl(s) || 0), 0)
 
   return (
     <div style={{ background: T.bg1, border: `1px solid ${T.border2}`, height: '100%', display: 'flex', flexDirection: 'column' }}>
@@ -162,43 +125,28 @@ export default function EquityCurve({ refreshKey, wsMessage }) {
       {/* Header */}
       <div style={{
         background: T.orange, padding: '3px 10px',
-        display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+        display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexShrink: 0,
       }}>
-        <span style={{ fontSize: '10px', fontWeight: '900', fontFamily: T.font, letterSpacing: '1px', color: '#000' }}>
-          EQUITY CURVE
-        </span>
-        <div style={{ display: 'flex', gap: '2px' }}>
-          <StratBtn label="ALL" active={selected === 'ALL'} onClick={() => setSelected('ALL')} />
-          {strategies.map(s => (
-            <StratBtn key={s} label={s} active={selected === s} onClick={() => setSelected(s)} />
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+          <span style={{ fontSize: '10px', fontWeight: '900', fontFamily: T.font, letterSpacing: '1px', color: '#000' }}>
+            PNL CURVE
+          </span>
+          {selected === 'ALL' && strategies.length > 0 && (
+            <span style={{ fontSize: '10px', fontWeight: '700', fontFamily: T.font, color: pnlColor(totalPnl) }}>
+              {totalPnl >= 0 ? '+' : ''}${totalPnl.toFixed(2)}
+            </span>
+          )}
+        </div>
+        <div style={{ display: 'flex', gap: '3px', flexWrap: 'wrap' }}>
+          <StratBtn label="ALL" active={selected === 'ALL'} onClick={() => setSelected('ALL')}
+            pnl={selected === 'ALL' ? null : null} />
+          {strategies.map((s, i) => (
+            <StratBtn key={s} label={s} color={COLORS[i % COLORS.length]}
+              active={selected === s} onClick={() => setSelected(s)}
+              pnl={stratPnl(s)} />
           ))}
         </div>
       </div>
-
-      {/* Stats bar — solo cuando hay una estrategia seleccionada */}
-      {selected !== 'ALL' && (() => {
-        const st = statsFor(selected)
-        if (!st) return null
-        const pnlC = pnlColor(st.pnl)
-        return (
-          <div style={{
-            display: 'flex', gap: '20px', padding: '4px 12px',
-            borderBottom: `1px solid ${T.border2}`, background: '#0d0d0d',
-          }}>
-            {[
-              ['EQUITY',   `$${st.last.toFixed(2)}`,                           T.white],
-              ['PNL',      `${st.pnl >= 0 ? '+' : ''}$${st.pnl.toFixed(2)}`,  pnlC],
-              ['RETURN',   `${st.pct >= 0 ? '+' : ''}${st.pct.toFixed(2)}%`,  pnlC],
-              ['MAX DD',   `${st.dd.toFixed(2)}%`,                              st.dd > 5 ? T.red : T.gray],
-            ].map(([lbl, val, col]) => (
-              <div key={lbl} style={{ display: 'flex', flexDirection: 'column', gap: '1px' }}>
-                <span style={{ fontSize: '8px', color: T.gray, fontFamily: T.font, letterSpacing: '1px' }}>{lbl}</span>
-                <span style={{ fontSize: '12px', fontWeight: '700', color: col, fontFamily: T.font }}>{val}</span>
-              </div>
-            ))}
-          </div>
-        )
-      })()}
 
       {/* Gráfico */}
       <div style={{ flex: 1, padding: '8px 4px 4px 0', minHeight: 0 }}>
@@ -208,60 +156,51 @@ export default function EquityCurve({ refreshKey, wsMessage }) {
           </div>
         ) : (
           <ResponsiveContainer width="100%" height="100%">
-            <AreaChart data={chartData}>
-
-              {/* Gradientes por estrategia */}
+            <ComposedChart data={chartData}>
               <defs>
-                {visibleStrats.map((s, i) => {
-                  const c = stratColor(s, i)
+                {visibles.map((s, i) => {
+                  const pnl = stratPnl(s)
+                  const c   = pnl != null && pnl < 0 ? T.red : COLORS[i % COLORS.length]
                   return (
-                    <linearGradient key={s} id={`grad_${s}`} x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="5%"  stopColor={c} stopOpacity={0.3} />
-                      <stop offset="95%" stopColor={c} stopOpacity={0.02} />
+                    <linearGradient key={s} id={`g_${s}`} x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%"  stopColor={c} stopOpacity={0.35} />
+                      <stop offset="95%" stopColor={c} stopOpacity={0.0} />
                     </linearGradient>
                   )
                 })}
               </defs>
 
-              <CartesianGrid strokeDasharray="2 6" stroke="#151515" />
+              <CartesianGrid strokeDasharray="2 6" stroke="#111" />
               <XAxis
                 dataKey="time"
                 tick={{ fontSize: 9, fill: T.gray, fontFamily: T.font }}
                 tickLine={false}
                 axisLine={{ stroke: T.border2 }}
+                interval="preserveStartEnd"
               />
               <YAxis
-                tickFormatter={v => `$${(v/1000).toFixed(1)}k`}
+                tickFormatter={v => `${v >= 0 ? '+' : ''}$${v}`}
                 tick={{ fontSize: 9, fill: T.gray, fontFamily: T.font }}
                 tickLine={false}
                 axisLine={{ stroke: T.border2 }}
-                width={50}
+                width={58}
               />
               <Tooltip content={<CustomTooltip />} />
-              <ReferenceLine
-                y={INITIAL}
-                stroke={T.border2}
-                strokeDasharray="4 3"
-                label={{ value: 'BASE', fill: T.gray2, fontSize: 8, fontFamily: T.font }}
-              />
+              <ReferenceLine y={0} stroke={T.border2} strokeDasharray="4 3" />
 
-              {visibleStrats.map((s, i) => {
-                const c = stratColor(s, i)
-                return (
-                  <Area
-                    key={s}
-                    type="monotone"
-                    dataKey={s}
-                    stroke={c}
-                    strokeWidth={1.5}
-                    fill={`url(#grad_${s})`}
-                    dot={false}
-                    connectNulls
-                    isAnimationActive={false}
-                  />
+              {visibles.map((s, i) => {
+                const pnl = stratPnl(s)
+                const c   = pnl != null && pnl < 0 ? T.red : COLORS[i % COLORS.length]
+                // En modo ALL: solo líneas. En modo single: área rellena
+                return selected === 'ALL' ? (
+                  <Line key={s} type="monotone" dataKey={s} stroke={c}
+                    strokeWidth={1.5} dot={false} connectNulls isAnimationActive={false} />
+                ) : (
+                  <Area key={s} type="monotone" dataKey={s} stroke={c} strokeWidth={2}
+                    fill={`url(#g_${s})`} dot={false} connectNulls isAnimationActive={false} />
                 )
               })}
-            </AreaChart>
+            </ComposedChart>
           </ResponsiveContainer>
         )}
       </div>
