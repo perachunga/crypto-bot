@@ -100,17 +100,28 @@ export default function EquityCurve({ refreshKey, wsMessage }) {
     return pts[pts.length - 1].equity - INITIAL
   }
 
-  // Construir datos del gráfico: eje X = tiempo, cada columna = PnL de una estrategia
+  // Construir datos del gráfico alineados en un eje X común con forward-fill
   const chartData = (() => {
     const visibles = selected === 'ALL' ? strategies : [selected]
-    const merged   = {}
-    visibles.forEach(s => {
-      ;(rawData[s] || []).forEach(p => {
-        if (!merged[p.time]) merged[p.time] = { time: p.time }
-        merged[p.time][s] = +(p.equity - INITIAL).toFixed(2)
+
+    // 1. Recoger todos los timestamps únicos ordenados
+    const allTimes = [...new Set(
+      visibles.flatMap(s => (rawData[s] || []).map(p => p.time))
+    )].sort()
+
+    // 2. Para cada tiempo, rellenar con el último valor conocido (forward-fill)
+    const lastKnown = {}
+    return allTimes.slice(-MAX_PTS).map(t => {
+      const row = { time: t }
+      visibles.forEach(s => {
+        const pts  = rawData[s] || []
+        const hit  = pts.find(p => p.time === t)
+        if (hit) lastKnown[s] = +(hit.equity - INITIAL).toFixed(2)
+        // Todos empiezan en 0 hasta su primer trade
+        row[s] = lastKnown[s] ?? 0
       })
+      return row
     })
-    return Object.values(merged).slice(-MAX_PTS)
   })()
 
   const visibles = selected === 'ALL' ? strategies : [selected]
