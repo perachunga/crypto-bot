@@ -119,7 +119,7 @@ export default function App() {
         {tab === 'OVERVIEW' && (
           <div style={{ display: 'grid', gridTemplateRows: '55% 22% 23%', height: '100%', gap: '1px', background: T.border2 }}>
             <div style={{ display: 'grid', gridTemplateColumns: '58% 42%', gap: '1px', background: T.border2 }}>
-              <EquityCurve refreshKey={refreshKey} />
+              <EquityCurve refreshKey={refreshKey} wsMessage={lastMessage} />
               <StrategyTable refreshKey={refreshKey} />
             </div>
             <LivePositions wsMessage={lastMessage} />
