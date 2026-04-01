@@ -193,11 +193,13 @@ export default function EquityCurve({ refreshKey, wsMessage }) {
                 const c   = pnl != null && pnl < 0 ? T.red : COLORS[i % COLORS.length]
                 // En modo ALL: solo líneas. En modo single: área rellena
                 return selected === 'ALL' ? (
-                  <Line key={s} type="stepAfter" dataKey={s} stroke={c}
-                    strokeWidth={1.5} dot={false} isAnimationActive={false} />
+                  <Line key={s} type="monotone" dataKey={s} stroke={c}
+                    strokeWidth={1.5} dot={{ r: 2, fill: c, strokeWidth: 0 }}
+                    activeDot={{ r: 4 }} connectNulls isAnimationActive={false} />
                 ) : (
-                  <Area key={s} type="stepAfter" dataKey={s} stroke={c} strokeWidth={2}
-                    fill={`url(#g_${s})`} dot={{ r: 2, fill: c }} isAnimationActive={false} />
+                  <Area key={s} type="monotone" dataKey={s} stroke={c} strokeWidth={2}
+                    fill={`url(#g_${s})`} dot={{ r: 3, fill: c, strokeWidth: 0 }}
+                    activeDot={{ r: 5 }} connectNulls isAnimationActive={false} />
                 )
               })}
             </ComposedChart>
