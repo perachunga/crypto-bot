@@ -1,245 +1,297 @@
-import { useState, useEffect, useCallback } from 'react'
-import {
-  ComposedChart, Area, Line, XAxis, YAxis, CartesianGrid,
-  Tooltip, ResponsiveContainer, ReferenceLine, Legend
-} from 'recharts'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { T, pnlColor } from '../theme.js'
 import { API_BASE } from '../config.js'
 
-const COLORS   = [T.orange, T.green, T.blue, T.yellow, '#cc44ff', '#ff44aa']
-const INITIAL  = 10000
-const MAX_PTS  = 200
+const INITIAL = 10000
+const COLORS  = [T.orange, T.green, T.blue, T.yellow, '#cc44ff', '#ff44aa']
+const W = 100  // viewBox width units (%)
+const PAD = { top: 16, right: 8, bottom: 24, left: 56 }
 
-function CustomTooltip({ active, payload, label }) {
-  if (!active || !payload?.length) return null
-  return (
-    <div style={{
-      background: '#000', border: `1px solid ${T.border2}`,
-      padding: '8px 12px', fontSize: '11px', fontFamily: T.font, minWidth: '170px',
-    }}>
-      <p style={{ color: T.gray, marginBottom: '5px', fontSize: '9px', letterSpacing: '1px' }}>{label}</p>
-      {payload.map((p, i) => {
-        const pnl = p.value
-        const col = pnlColor(pnl)
-        return (
-          <div key={i} style={{ display: 'flex', justifyContent: 'space-between', gap: '12px', marginBottom: '2px' }}>
-            <span style={{ color: p.color, fontSize: '9px', letterSpacing: '1px' }}>{p.name}</span>
-            <span style={{ color: col, fontWeight: '700' }}>
-              {pnl >= 0 ? '+' : ''}${pnl.toFixed(2)}
-            </span>
-          </div>
-        )
-      })}
-    </div>
-  )
-}
-
-function StratBtn({ label, color, active, onClick, pnl }) {
-  const col = pnl != null ? pnlColor(pnl) : T.gray
-  return (
-    <button onClick={onClick} style={{
-      padding: '2px 8px', fontSize: '9px', fontFamily: T.font, letterSpacing: '1px',
-      background:   active ? '#111' : 'transparent',
-      color:        active ? (color || T.orange) : T.gray,
-      border:       active ? `1px solid ${color || T.orange}` : `1px solid ${T.border2}`,
-      cursor: 'pointer', fontWeight: '700',
-      display: 'flex', alignItems: 'center', gap: '5px',
-    }}>
-      {label}
-      {pnl != null && (
-        <span style={{ color: col, fontSize: '8px' }}>
-          {pnl >= 0 ? '+' : ''}${Math.abs(pnl).toFixed(0)}
-        </span>
-      )}
-    </button>
-  )
+function useMouse(ref) {
+  const [pos, setPos] = useState(null)
+  useEffect(() => {
+    const el = ref.current
+    if (!el) return
+    const move = e => {
+      const r = el.getBoundingClientRect()
+      setPos({ x: e.clientX - r.left, y: e.clientY - r.top, w: r.width, h: r.height })
+    }
+    const leave = () => setPos(null)
+    el.addEventListener('mousemove', move)
+    el.addEventListener('mouseleave', leave)
+    return () => { el.removeEventListener('mousemove', move); el.removeEventListener('mouseleave', leave) }
+  }, [])
+  return pos
 }
 
 export default function EquityCurve({ refreshKey, wsMessage }) {
-  const [rawData,    setRawData]    = useState({})   // { strategy: [{ time, equity }] }
-  const [strategies, setStrategies] = useState([])
+  const [series,     setSeries]     = useState([])   // [{ name, color, points: [{ts, pnl}] }]
   const [selected,   setSelected]   = useState('ALL')
+  const svgRef = useRef(null)
+  const mouse  = useMouse(svgRef)
 
-  const loadEquity = useCallback(() => {
+  // ── Cargar datos ────────────────────────────────────────────────────────────
+  const load = useCallback(() => {
     fetch(`${API_BASE}/api/equity`)
       .then(r => r.json())
       .then(rows => {
-        const byStrat = {}
-        const strats  = new Set()
+        const map = {}
         rows.forEach(r => {
-          strats.add(r.strategy_name)
-          if (!byStrat[r.strategy_name]) byStrat[r.strategy_name] = []
-          const ts    = r.timestamp || ''
-          const label = ts.slice(11, 16) || ''   // HH:MM para mostrar
-          byStrat[r.strategy_name].push({ time: label, ts, equity: r.equity })
+          if (!map[r.strategy_name]) map[r.strategy_name] = []
+          map[r.strategy_name].push({ ts: r.timestamp, pnl: +(r.equity - INITIAL).toFixed(2) })
         })
-        setStrategies([...strats])
-        setRawData(byStrat)
+        const built = Object.entries(map).map(([name, pts], i) => ({
+          name,
+          color: COLORS[i % COLORS.length],
+          points: pts.sort((a, b) => a.ts < b.ts ? -1 : 1),
+        }))
+        setSeries(built)
       })
       .catch(() => {})
   }, [])
 
-  useEffect(() => { loadEquity() }, [refreshKey, loadEquity])
+  useEffect(() => { load() }, [refreshKey, load])
 
-  // Actualización en tiempo real al cerrar un trade
+  // Actualización RT al cerrar un trade
   useEffect(() => {
     if (!wsMessage || wsMessage.type !== 'trade') return
     const { strategy_name, equity } = wsMessage.data || {}
     if (!strategy_name || equity == null) return
-    const ts = new Date().toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit' })
-    setRawData(prev => {
-      const pts = [...(prev[strategy_name] || []), { time: ts, equity }].slice(-MAX_PTS)
-      return { ...prev, [strategy_name]: pts }
-    })
-    setStrategies(prev => prev.includes(strategy_name) ? prev : [...prev, strategy_name])
+    const ts  = new Date().toISOString()
+    const pnl = +(equity - INITIAL).toFixed(2)
+    setSeries(prev => prev.map(s =>
+      s.name === strategy_name
+        ? { ...s, points: [...s.points, { ts, pnl }].slice(-200) }
+        : s
+    ))
   }, [wsMessage])
 
-  // PnL de cada estrategia (último valor - INITIAL)
-  const stratPnl = (s) => {
-    const pts = rawData[s]
-    if (!pts?.length) return null
-    return pts[pts.length - 1].equity - INITIAL
+  // ── Datos a mostrar ─────────────────────────────────────────────────────────
+  const visible = selected === 'ALL' ? series : series.filter(s => s.name === selected)
+
+  // Timeline común: todos los timestamps de las estrategias visibles, ordenados
+  const allTs = [...new Set(visible.flatMap(s => s.points.map(p => p.ts)))].sort()
+
+  // Para cada serie, interpolar PnL en cada timestamp (forward-fill desde 0)
+  const aligned = visible.map(s => {
+    let last = 0
+    const byTs = Object.fromEntries(s.points.map(p => [p.ts, p.pnl]))
+    return {
+      ...s,
+      values: allTs.map(t => {
+        if (byTs[t] !== undefined) last = byTs[t]
+        return last
+      }),
+    }
+  })
+
+  // ── Escalas ─────────────────────────────────────────────────────────────────
+  const allVals = aligned.flatMap(s => s.values)
+  const minV = allVals.length ? Math.min(0, ...allVals) : -50
+  const maxV = allVals.length ? Math.max(0, ...allVals) : 50
+  const padV = Math.max((maxV - minV) * 0.12, 10)
+  const yMin = minV - padV
+  const yMax = maxV + padV
+
+  const xScale = i  => allTs.length < 2 ? 50 : (i / (allTs.length - 1)) * 100
+  const yScale = v  => 100 - ((v - yMin) / (yMax - yMin)) * 100
+  const y0      = yScale(0)
+
+  // ── Path SVG ────────────────────────────────────────────────────────────────
+  const makePath = values => {
+    if (!values.length) return ''
+    return values.map((v, i) => `${i === 0 ? 'M' : 'L'}${xScale(i).toFixed(2)},${yScale(v).toFixed(2)}`).join(' ')
   }
 
-  // Construir datos del gráfico alineados en un eje X común
-  const chartData = (() => {
-    const visibles = selected === 'ALL' ? strategies : [selected]
-
-    // 1. Unir todos los puntos de todas las estrategias en una lista ordenada por tiempo real
-    const allPoints = visibles.flatMap(s =>
-      (rawData[s] || []).map(p => ({ time: p.time, ts: p.ts, strat: s, pnl: +(p.equity - INITIAL).toFixed(2) }))
-    ).sort((a, b) => a.time.localeCompare(b.time))
-
-    // 2. Merge por tiempo con forward-fill — pero null antes del primer snapshot de cada estrategia
-    const firstSeen = {}
-    const lastKnown = {}
-    const byTime = {}
-
-    allPoints.forEach(({ time, strat, pnl }) => {
-      if (!byTime[time]) byTime[time] = { time }
-      firstSeen[strat] = true
-      lastKnown[strat] = pnl
-      byTime[time][strat] = pnl
-    })
-
-    // 3. Forward-fill los huecos (null si la estrategia aún no ha tenido su primer trade)
-    const times = Object.keys(byTime).sort()
-    const filled = {}
-    times.forEach(t => {
-      const row = { time: t }
-      visibles.forEach(s => {
-        if (byTime[t]?.[s] !== undefined) {
-          filled[s] = byTime[t][s]
-          row[s] = byTime[t][s]
-        } else {
-          row[s] = filled[s] ?? null  // null = no dibujar antes del primer trade
-        }
-      })
-    })
-
-    return Object.values(byTime).map((row, i) => {
-      const t = row.time
-      const out = { time: t }
-      visibles.forEach(s => { out[s] = row[s] ?? null })
-      return out
-    }).slice(-MAX_PTS)
+  // ── Tooltip ─────────────────────────────────────────────────────────────────
+  const tooltip = (() => {
+    if (!mouse || !allTs.length) return null
+    const svgEl = svgRef.current
+    if (!svgEl) return null
+    const { w, h, x } = mouse
+    const innerW = w  // approx
+    const pct = x / innerW
+    const idx = Math.round(pct * (allTs.length - 1))
+    const clampIdx = Math.max(0, Math.min(idx, allTs.length - 1))
+    const ts = allTs[clampIdx]
+    const label = ts?.slice(11, 16) || ''
+    const entries = aligned.map(s => ({ name: s.name, color: s.color, pnl: s.values[clampIdx] }))
+    return { idx: clampIdx, label, entries, x: mouse.x, y: mouse.y }
   })()
 
-  const visibles = selected === 'ALL' ? strategies : [selected]
-  const isEmpty  = chartData.length === 0
+  // ── Y-axis ticks ────────────────────────────────────────────────────────────
+  const range  = yMax - yMin
+  const step   = range < 100 ? 25 : range < 300 ? 50 : range < 600 ? 100 : 200
+  const ticks  = []
+  const start  = Math.ceil(yMin / step) * step
+  for (let v = start; v <= yMax; v += step) ticks.push(v)
 
-  // Stats globales en modo ALL
-  const totalPnl = strategies.reduce((acc, s) => acc + (stratPnl(s) || 0), 0)
+  // ── X-axis labels ───────────────────────────────────────────────────────────
+  const xLabels = allTs.length > 1
+    ? [0, Math.floor(allTs.length * 0.25), Math.floor(allTs.length * 0.5),
+       Math.floor(allTs.length * 0.75), allTs.length - 1]
+        .filter((v, i, a) => a.indexOf(v) === i)
+        .map(i => ({ i, label: allTs[i]?.slice(11, 16) || '' }))
+    : []
+
+  const totalPnl = series.reduce((acc, s) => {
+    const last = s.points[s.points.length - 1]?.pnl ?? 0
+    return acc + last
+  }, 0)
+
+  const isEmpty = allTs.length === 0
 
   return (
     <div style={{ background: T.bg1, border: `1px solid ${T.border2}`, height: '100%', display: 'flex', flexDirection: 'column' }}>
 
       {/* Header */}
-      <div style={{
-        background: T.orange, padding: '3px 10px',
-        display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexShrink: 0,
-      }}>
+      <div style={{ background: T.orange, padding: '3px 10px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexShrink: 0 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-          <span style={{ fontSize: '10px', fontWeight: '900', fontFamily: T.font, letterSpacing: '1px', color: '#000' }}>
-            PNL CURVE
+          <span style={{ fontSize: '10px', fontWeight: '900', fontFamily: T.font, letterSpacing: '1px', color: '#000' }}>PNL CURVE</span>
+          <span style={{ fontSize: '10px', fontWeight: '700', fontFamily: T.font, color: pnlColor(totalPnl) }}>
+            {totalPnl >= 0 ? '+' : ''}${totalPnl.toFixed(2)}
           </span>
-          {selected === 'ALL' && strategies.length > 0 && (
-            <span style={{ fontSize: '10px', fontWeight: '700', fontFamily: T.font, color: pnlColor(totalPnl) }}>
-              {totalPnl >= 0 ? '+' : ''}${totalPnl.toFixed(2)}
-            </span>
-          )}
         </div>
         <div style={{ display: 'flex', gap: '3px', flexWrap: 'wrap' }}>
-          <StratBtn label="ALL" active={selected === 'ALL'} onClick={() => setSelected('ALL')}
-            pnl={selected === 'ALL' ? null : null} />
-          {strategies.map((s, i) => (
-            <StratBtn key={s} label={s} color={COLORS[i % COLORS.length]}
-              active={selected === s} onClick={() => setSelected(s)}
-              pnl={stratPnl(s)} />
-          ))}
+          <button onClick={() => setSelected('ALL')} style={btnStyle(selected === 'ALL', T.orange)}>ALL</button>
+          {series.map(s => {
+            const last = s.points[s.points.length - 1]?.pnl ?? 0
+            return (
+              <button key={s.name} onClick={() => setSelected(s.name)} style={btnStyle(selected === s.name, s.color)}>
+                {s.name} <span style={{ color: pnlColor(last), marginLeft: 3 }}>{last >= 0 ? '+' : ''}${last.toFixed(0)}</span>
+              </button>
+            )
+          })}
         </div>
       </div>
 
-      {/* Gráfico */}
-      <div style={{ flex: 1, padding: '8px 4px 4px 0', minHeight: 0 }}>
+      {/* Chart */}
+      <div ref={svgRef} style={{ flex: 1, position: 'relative', minHeight: 0 }}>
         {isEmpty ? (
           <div style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: T.gray, fontSize: '11px', fontFamily: T.font }}>
             ESPERANDO DATOS...
           </div>
         ) : (
-          <ResponsiveContainer width="100%" height="100%">
-            <ComposedChart data={chartData}>
-              <defs>
-                {visibles.map((s, i) => {
-                  const pnl = stratPnl(s)
-                  const c   = pnl != null && pnl < 0 ? T.red : COLORS[i % COLORS.length]
-                  return (
-                    <linearGradient key={s} id={`g_${s}`} x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="5%"  stopColor={c} stopOpacity={0.35} />
-                      <stop offset="95%" stopColor={c} stopOpacity={0.0} />
-                    </linearGradient>
-                  )
-                })}
-              </defs>
+          <svg width="100%" height="100%" viewBox="0 0 100 100" preserveAspectRatio="none"
+            style={{ display: 'block', overflow: 'visible' }}>
 
-              <CartesianGrid strokeDasharray="2 6" stroke="#111" />
-              <XAxis
-                dataKey="time"
-                tick={{ fontSize: 9, fill: T.gray, fontFamily: T.font }}
-                tickLine={false}
-                axisLine={{ stroke: T.border2 }}
-                interval="preserveStartEnd"
+            {/* Grid horizontal */}
+            {ticks.map(v => (
+              <line key={v}
+                x1="0" y1={yScale(v)} x2="100" y2={yScale(v)}
+                stroke={v === 0 ? T.border2 : '#141414'} strokeWidth={v === 0 ? 0.3 : 0.2}
+                strokeDasharray={v === 0 ? '1 0' : '0.5 1.5'}
+                vectorEffect="non-scaling-stroke"
               />
-              <YAxis
-                tickFormatter={v => `${v >= 0 ? '+' : ''}$${v}`}
-                tick={{ fontSize: 9, fill: T.gray, fontFamily: T.font }}
-                tickLine={false}
-                axisLine={{ stroke: T.border2 }}
-                width={58}
-                domain={['auto', 'auto']}
-                allowDataOverflow={false}
-              />
-              <Tooltip content={<CustomTooltip />} />
-              <ReferenceLine y={0} stroke={T.border2} strokeDasharray="4 3" />
+            ))}
 
-              {visibles.map((s, i) => {
-                const pnl = stratPnl(s)
-                const c   = pnl != null && pnl < 0 ? T.red : COLORS[i % COLORS.length]
-                // En modo ALL: solo líneas. En modo single: área rellena
-                return selected === 'ALL' ? (
-                  <Line key={s} type="monotone" dataKey={s} stroke={c}
-                    strokeWidth={1.5} dot={{ r: 2, fill: c, strokeWidth: 0 }}
-                    activeDot={{ r: 4 }} isAnimationActive={false} />
-                ) : (
-                  <Area key={s} type="monotone" dataKey={s} stroke={c} strokeWidth={2}
-                    fill={`url(#g_${s})`} dot={{ r: 3, fill: c, strokeWidth: 0 }}
-                    activeDot={{ r: 5 }} isAnimationActive={false} />
-                )
-              })}
-            </ComposedChart>
-          </ResponsiveContainer>
+            {/* Área de relleno (solo en modo single) */}
+            {selected !== 'ALL' && aligned.map(s => {
+              if (!s.values.length) return null
+              const fillPath = makePath(s.values)
+                + ` L${xScale(s.values.length - 1).toFixed(2)},${y0.toFixed(2)}`
+                + ` L0,${y0.toFixed(2)} Z`
+              const col = pnlColor(s.values[s.values.length - 1])
+              return (
+                <path key={s.name + '_fill'} d={fillPath}
+                  fill={col} fillOpacity={0.08} stroke="none" />
+              )
+            })}
+
+            {/* Líneas */}
+            {aligned.map(s => (
+              <path key={s.name} d={makePath(s.values)}
+                fill="none" stroke={s.color} strokeWidth="0.5"
+                vectorEffect="non-scaling-stroke" />
+            ))}
+
+            {/* Último punto de cada serie */}
+            {aligned.map(s => {
+              if (!s.values.length) return null
+              const lx = xScale(s.values.length - 1)
+              const ly = yScale(s.values[s.values.length - 1])
+              return (
+                <circle key={s.name + '_last'} cx={lx} cy={ly} r="1"
+                  fill={s.color} vectorEffect="non-scaling-stroke" />
+              )
+            })}
+
+            {/* Línea vertical del cursor */}
+            {tooltip && (
+              <line
+                x1={xScale(tooltip.idx)} y1="0"
+                x2={xScale(tooltip.idx)} y2="100"
+                stroke={T.border2} strokeWidth="0.3"
+                strokeDasharray="1 1" vectorEffect="non-scaling-stroke"
+              />
+            )}
+          </svg>
+        )}
+
+        {/* Y-axis labels (overlay absoluto) */}
+        {!isEmpty && (
+          <div style={{ position: 'absolute', top: 0, left: 0, height: '100%', width: '50px', pointerEvents: 'none' }}>
+            {ticks.map(v => (
+              <div key={v} style={{
+                position: 'absolute',
+                top: `${yScale(v)}%`,
+                right: '4px',
+                transform: 'translateY(-50%)',
+                fontSize: '8px', color: v === 0 ? T.gray : T.gray2,
+                fontFamily: T.font, whiteSpace: 'nowrap',
+              }}>
+                {v >= 0 ? '+' : ''}${v}
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* X-axis labels */}
+        {!isEmpty && (
+          <div style={{ position: 'absolute', bottom: 0, left: '50px', right: 0, height: '20px', pointerEvents: 'none' }}>
+            {xLabels.map(({ i, label }) => (
+              <div key={i} style={{
+                position: 'absolute',
+                left: `${xScale(i)}%`,
+                transform: 'translateX(-50%)',
+                fontSize: '8px', color: T.gray2, fontFamily: T.font,
+              }}>{label}</div>
+            ))}
+          </div>
+        )}
+
+        {/* Tooltip */}
+        {tooltip && (
+          <div style={{
+            position: 'absolute',
+            left: Math.min(tooltip.x + 10, (svgRef.current?.offsetWidth || 400) - 140),
+            top:  Math.max(tooltip.y - 60, 4),
+            background: '#000', border: `1px solid ${T.border2}`,
+            padding: '6px 10px', fontSize: '10px', fontFamily: T.font,
+            pointerEvents: 'none', zIndex: 10, minWidth: '130px',
+          }}>
+            <div style={{ color: T.gray, fontSize: '9px', marginBottom: '4px', letterSpacing: '1px' }}>{tooltip.label}</div>
+            {tooltip.entries.map(e => (
+              <div key={e.name} style={{ display: 'flex', justifyContent: 'space-between', gap: '10px', marginBottom: '2px' }}>
+                <span style={{ color: e.color, fontSize: '9px' }}>{e.name}</span>
+                <span style={{ color: pnlColor(e.pnl), fontWeight: '700' }}>
+                  {e.pnl >= 0 ? '+' : ''}${e.pnl.toFixed(2)}
+                </span>
+              </div>
+            ))}
+          </div>
         )}
       </div>
     </div>
   )
+}
+
+function btnStyle(active, color) {
+  return {
+    padding: '1px 6px', fontSize: '9px', fontFamily: "'Courier New', monospace",
+    letterSpacing: '1px', background: active ? '#111' : 'transparent',
+    color: active ? color : '#555',
+    border: active ? `1px solid ${color}` : '1px solid #222',
+    cursor: 'pointer', fontWeight: '700',
+  }
 }
