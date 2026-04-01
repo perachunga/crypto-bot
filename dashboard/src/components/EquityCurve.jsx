@@ -69,8 +69,9 @@ export default function EquityCurve({ refreshKey, wsMessage }) {
         rows.forEach(r => {
           strats.add(r.strategy_name)
           if (!byStrat[r.strategy_name]) byStrat[r.strategy_name] = []
-          const ts = r.timestamp?.slice(11, 16) || ''
-          byStrat[r.strategy_name].push({ time: ts, equity: r.equity })
+          const ts    = r.timestamp || ''
+          const label = ts.slice(11, 16) || ''   // HH:MM para mostrar
+          byStrat[r.strategy_name].push({ time: label, ts, equity: r.equity })
         })
         setStrategies([...strats])
         setRawData(byStrat)
@@ -100,28 +101,48 @@ export default function EquityCurve({ refreshKey, wsMessage }) {
     return pts[pts.length - 1].equity - INITIAL
   }
 
-  // Construir datos del gráfico alineados en un eje X común con forward-fill
+  // Construir datos del gráfico alineados en un eje X común
   const chartData = (() => {
     const visibles = selected === 'ALL' ? strategies : [selected]
 
-    // 1. Recoger todos los timestamps únicos ordenados
-    const allTimes = [...new Set(
-      visibles.flatMap(s => (rawData[s] || []).map(p => p.time))
-    )].sort()
+    // 1. Unir todos los puntos de todas las estrategias en una lista ordenada por tiempo real
+    const allPoints = visibles.flatMap(s =>
+      (rawData[s] || []).map(p => ({ time: p.time, ts: p.ts, strat: s, pnl: +(p.equity - INITIAL).toFixed(2) }))
+    ).sort((a, b) => a.time.localeCompare(b.time))
 
-    // 2. Para cada tiempo, rellenar con el último valor conocido (forward-fill)
+    // 2. Merge por tiempo con forward-fill — pero null antes del primer snapshot de cada estrategia
+    const firstSeen = {}
     const lastKnown = {}
-    return allTimes.slice(-MAX_PTS).map(t => {
+    const byTime = {}
+
+    allPoints.forEach(({ time, strat, pnl }) => {
+      if (!byTime[time]) byTime[time] = { time }
+      firstSeen[strat] = true
+      lastKnown[strat] = pnl
+      byTime[time][strat] = pnl
+    })
+
+    // 3. Forward-fill los huecos (null si la estrategia aún no ha tenido su primer trade)
+    const times = Object.keys(byTime).sort()
+    const filled = {}
+    times.forEach(t => {
       const row = { time: t }
       visibles.forEach(s => {
-        const pts  = rawData[s] || []
-        const hit  = pts.find(p => p.time === t)
-        if (hit) lastKnown[s] = +(hit.equity - INITIAL).toFixed(2)
-        // Todos empiezan en 0 hasta su primer trade
-        row[s] = lastKnown[s] ?? 0
+        if (byTime[t]?.[s] !== undefined) {
+          filled[s] = byTime[t][s]
+          row[s] = byTime[t][s]
+        } else {
+          row[s] = filled[s] ?? null  // null = no dibujar antes del primer trade
+        }
       })
-      return row
     })
+
+    return Object.values(byTime).map((row, i) => {
+      const t = row.time
+      const out = { time: t }
+      visibles.forEach(s => { out[s] = row[s] ?? null })
+      return out
+    }).slice(-MAX_PTS)
   })()
 
   const visibles = selected === 'ALL' ? strategies : [selected]
@@ -195,6 +216,8 @@ export default function EquityCurve({ refreshKey, wsMessage }) {
                 tickLine={false}
                 axisLine={{ stroke: T.border2 }}
                 width={58}
+                domain={['auto', 'auto']}
+                allowDataOverflow={false}
               />
               <Tooltip content={<CustomTooltip />} />
               <ReferenceLine y={0} stroke={T.border2} strokeDasharray="4 3" />
@@ -206,11 +229,11 @@ export default function EquityCurve({ refreshKey, wsMessage }) {
                 return selected === 'ALL' ? (
                   <Line key={s} type="monotone" dataKey={s} stroke={c}
                     strokeWidth={1.5} dot={{ r: 2, fill: c, strokeWidth: 0 }}
-                    activeDot={{ r: 4 }} connectNulls isAnimationActive={false} />
+                    activeDot={{ r: 4 }} isAnimationActive={false} />
                 ) : (
                   <Area key={s} type="monotone" dataKey={s} stroke={c} strokeWidth={2}
                     fill={`url(#g_${s})`} dot={{ r: 3, fill: c, strokeWidth: 0 }}
-                    activeDot={{ r: 5 }} connectNulls isAnimationActive={false} />
+                    activeDot={{ r: 5 }} isAnimationActive={false} />
                 )
               })}
             </ComposedChart>
