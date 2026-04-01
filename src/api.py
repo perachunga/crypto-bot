@@ -75,6 +75,8 @@ async def lifespan(app: FastAPI):
     global trader, engine, feed
 
     init_db()
+    from migrate_once import migrate_once
+    migrate_once()
     trader = PaperTrader()
     engine = StrategyEngine(trader)
     feed   = DataFeed(engine)
