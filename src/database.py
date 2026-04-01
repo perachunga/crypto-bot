@@ -2,6 +2,7 @@
 SQLite database — trades, positions, equity snapshots, strategy configs.
 """
 import json
+import os
 import statistics
 import uuid
 from datetime import datetime
@@ -10,6 +11,11 @@ from sqlalchemy import (
     String, Float, Boolean, DateTime, Text
 )
 from config import DB_PATH
+
+# Crear directorio si no existe (necesario en Railway con volumen /data)
+_db_dir = os.path.dirname(DB_PATH)
+if _db_dir:
+    os.makedirs(_db_dir, exist_ok=True)
 
 engine   = create_engine(f"sqlite:///{DB_PATH}", echo=False)
 metadata = MetaData()
