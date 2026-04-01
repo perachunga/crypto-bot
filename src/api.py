@@ -25,7 +25,7 @@ import json
 import asyncio
 from datetime import datetime
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 
 from database import (
@@ -130,6 +130,8 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="Crypto Bot API", lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
+router = APIRouter(prefix="/api")
+
 
 # ── REST ──────────────────────────────────────────────────────────────────────
 
@@ -137,7 +139,7 @@ def _ts(v):
     return v.isoformat() if isinstance(v, datetime) else v
 
 
-@app.get("/summary")
+@router.get("/summary")
 def summary():
     if trader is None:
         return {}
@@ -159,23 +161,23 @@ def summary():
     }
 
 
-@app.get("/metrics")
+@router.get("/metrics")
 def metrics():
     return get_all_metrics()
 
 
-@app.get("/metrics/{strategy_name}")
+@router.get("/metrics/{strategy_name}")
 def metrics_one(strategy_name: str):
     return get_strategy_metrics(strategy_name)
 
 
-@app.get("/trades")
+@router.get("/trades")
 def trades(strategy: str | None = None, limit: int = 200):
     return [{**t, "opened_at": _ts(t["opened_at"]), "closed_at": _ts(t["closed_at"])}
             for t in get_trades(strategy_name=strategy, limit=limit)]
 
 
-@app.get("/positions")
+@router.get("/positions")
 def positions():
     prices = {**_last_prices}
     upnl   = trader.get_unrealized_pnl(prices) if trader else {}
@@ -191,18 +193,18 @@ def positions():
     return result
 
 
-@app.get("/equity")
+@router.get("/equity")
 def equity_all(limit: int = 500):
     return [{**s, "timestamp": _ts(s["timestamp"])} for s in get_equity_snapshots(limit=limit)]
 
 
-@app.get("/equity/{strategy_name}")
+@router.get("/equity/{strategy_name}")
 def equity_one(strategy_name: str, limit: int = 500):
     return [{**s, "timestamp": _ts(s["timestamp"])}
             for s in get_equity_snapshots(strategy_name=strategy_name, limit=limit)]
 
 
-@app.get("/strategies")
+@router.get("/strategies")
 def strategies_list():
     """Retorna configuración + métricas de cada estrategia registrada."""
     configs  = {c["name"]: c for c in get_strategy_configs()}
@@ -229,7 +231,7 @@ def strategies_list():
     return result
 
 
-@app.post("/strategies/{strategy_name}/reset")
+@router.post("/strategies/{strategy_name}/reset")
 def reset_strategy(strategy_name: str):
     """Cierra posiciones abiertas y resetea el capital de la estrategia."""
     if trader is None or engine is None:
@@ -246,7 +248,7 @@ def reset_strategy(strategy_name: str):
     return result
 
 
-@app.patch("/strategies/{strategy_name}/toggle")
+@router.patch("/strategies/{strategy_name}/toggle")
 def toggle_strategy(strategy_name: str):
     """Activa o desactiva una estrategia."""
     if engine is None:
@@ -260,7 +262,7 @@ def toggle_strategy(strategy_name: str):
     return {"error": "strategy not found"}
 
 
-@app.get("/mm")
+@router.get("/mm")
 def mm_state():
     """Estado del market maker: inventario y cotizaciones por símbolo."""
     if engine is None:
@@ -268,7 +270,7 @@ def mm_state():
     return engine.get_mm_state()
 
 
-@app.get("/candles/{symbol}")
+@router.get("/candles/{symbol}")
 def candles(symbol: str):
     if engine is None:
         return []
@@ -276,7 +278,7 @@ def candles(symbol: str):
     return engine.get_candles(sym)
 
 
-@app.get("/hurst/{symbol}")
+@router.get("/hurst/{symbol}")
 def hurst(symbol: str):
     if engine is None:
         return {"hurst": None}
@@ -287,6 +289,9 @@ def hurst(symbol: str):
               else "trending" if h and h > 0.55
               else "random-walk" if h else None)
     return {"symbol": sym, "hurst": round(h, 3) if h else None, "regime": regime}
+
+
+app.include_router(router)
 
 
 # ── WebSocket ─────────────────────────────────────────────────────────────────
