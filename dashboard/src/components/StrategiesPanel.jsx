@@ -68,7 +68,7 @@ function StrategyCard({ strategy, onReset, onToggle }) {
       </div>
 
       {/* Stats row */}
-      <div style={{ display: 'flex', gap: '0', padding: '8px 10px', borderBottom: `1px solid #111`, flexWrap: 'wrap', gap: '12px' }}>
+      <div style={{ display: 'flex', gap: '12px', padding: '8px 10px', borderBottom: `1px solid #111`, flexWrap: 'wrap' }}>
         <StatBadge label="TRADES"  value={m.trades || 0}  color={T.blue} />
         <StatBadge label="WIN%"    value={`${(m.win_rate || 0).toFixed(1)}%`}
                    color={(m.win_rate || 0) >= 50 ? T.green : T.red} />
