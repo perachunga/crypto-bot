@@ -7,10 +7,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY src/ ./src/
 
-WORKDIR /app/src
-
 ENV DB_PATH=/data/crypto_bot.db
 
 EXPOSE 8001
 
-CMD ["python", "main.py"]
+CMD ["python", "src/main.py"]
