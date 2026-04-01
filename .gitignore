@@ -1,0 +1,17 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+.env
+
+# Base de datos local (Railway usa /data)
+src/crypto_bot.db
+crypto_bot.db
+
+# Dashboard build
+dashboard/node_modules/
+dashboard/dist/
+
+# macOS
+.DS_Store

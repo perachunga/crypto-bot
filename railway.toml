@@ -1,0 +1,11 @@
+[build]
+dockerfilePath = "Dockerfile"
+
+[deploy]
+startCommand = "python src/main.py"
+healthcheckPath = "/summary"
+healthcheckTimeout = 30
+restartPolicyType = "always"
+
+[[volumes]]
+mountPath = "/data"
